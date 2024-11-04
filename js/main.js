@@ -16,6 +16,18 @@ var globalWorldData = {
     worldY: 20,
     speedMode: false,
     chatting: false,
+    menuScene: null,
+    sidebar: "status",
+    menuData: {
+        loadStatement: null,
+        selectedAbility: 0,
+        selectedKanji: 0,
+        selectedWriteup: 0,
+        isReadingWriteup: false,
+
+        // array to change the equipped abilities to after menu is closed
+        //newEquippedAbilities: [null,null,null,null,null,null,null,null,null,null],
+    },
 
     // Counts the minutes elapsed from 0:00 in the day, for now it goes up 1 every second
     currentGameClock: 600,
@@ -195,6 +207,11 @@ function processGameJsonData(data) {
 
 // Levels isnt the most amazing word for it technically but it is the terminology that ldtk uses so thats the terms we are using
 var levels = [];
+
+// Clouds
+var clouds = [];
+var cloudXOffset = 0;
+var cloudYOffset = 0;
 
 // Information on the connections between levels. currently an array of connections that is to be iterated through when looking for the other side of a connection.
 var connections = [];
@@ -388,7 +405,7 @@ zenMaruBold.load().then(function(font){document.fonts.add(font);});
 var zenMaruBlack = new FontFace('zenMaruBlack', 'url(assets/ZenMaruGothic-Black.ttf)');
 zenMaruBlack.load().then(function(font){document.fonts.add(font);});
 
-const characterList = ["witch","andro","gladius","lizard"];
+const characterList = ["witch","andro","gladius","lizard","hiddenone_spider"];
 
 var characterSpritesheets={},characterFaces={},characterBitrates={};
 const faceBitrate = 96;
@@ -668,6 +685,8 @@ const wrapText = function(ctx, text, y, maxWidth, lineHeight, japanese = false) 
 // UI objects will be stored in global arrays:
 let globalStatusBarUiElements = [];
 
+let globalMenuTabUiElements = [];
+
 // For all micellanous elements
 let globalUIElements = [];
 
@@ -712,37 +731,54 @@ function createUiElement(name,type,x,y,width,height, particleSystems = [], toolt
         isVisible: true
     };
 
+    newUiElement.tooltip.x = x;
+    newUiElement.tooltip.y = y;
+    newUiElement.tooltip.width = width;
+    newUiElement.tooltip.height = height;
+
     return newUiElement;
 }
 
 function drawInventorySlot(uiElement,playerInventoryData){
     context.lineWidth = 2;
+    context.fillStyle = 'black';
     context.strokeStyle = 'hsla(270, 30%, 60%, 1)';
     context.beginPath();
     context.roundRect(uiElement.x, uiElement.y, uiElement.width, uiElement.height, 3);
+    context.fill();
     context.stroke();
 
     if(playerInventoryData.inventory[uiElement.slotNum] !== "none"){
-        drawItemIcon(playerInventoryData.inventory[uiElement.slotNum],uiElement.x,uiElement.y);
+        if(uiElement.width !== 45){
+            context.save();
+            context.translate(uiElement.x,uiElement.y);
+            context.scale(uiElement.width/42,uiElement.height/42);
+            drawItemIcon(playerInventoryData.inventory[uiElement.slotNum],-1,-1);
+            context.restore();
+        } else {
+            drawItemIcon(playerInventoryData.inventory[uiElement.slotNum],uiElement.x,uiElement.y);
+        }
     }
 }
 
 function drawAbilitySlot(uiElement,playerAbilityData){
-    if(playerAbilityData.equippedAbilities[uiElement.slotNum] !== null){
-        context.drawImage(abilityIcons[ playerAbilityData.list[playerAbilityData.equippedAbilities[uiElement.slotNum]].index ],uiElement.x,uiElement.y,45,45);
-    }
-
     context.lineWidth = 2;
+    context.fillStyle = 'black';
     context.strokeStyle = 'hsla(0, 30%, 60%, 1)';
     context.beginPath();
     context.roundRect(uiElement.x, uiElement.y, uiElement.width, uiElement.height, 3);
+    context.fill();
     context.stroke();
+
+    if(playerAbilityData.equippedAbilities[uiElement.slotNum] !== null){
+        context.drawImage(abilityIcons[ playerAbilityData.list[playerAbilityData.equippedAbilities[uiElement.slotNum]].index ],uiElement.x+1,uiElement.y+1,uiElement.width-2,uiElement.height-2);
+    }
 }
 
-// Draws the current tooltip
-function drawTooltip() {
+// Draws a tooltip
+function drawTooltip(tooltip) {
     let draw = function(titleColor,titleText,bodyText,jp = false,titleShadow=0,shadowColor = "hsl(0, 15%, 0%, 70%)"){
-        let wrappedText = wrapText(context, bodyText, globalInputData.mouseY+74, 350, 16, jp);
+        let wrappedText = wrapText(context, bodyText, globalInputData.mouseY+74, 330, 16, jp);
 
         const boxX = globalInputData.mouseX+12;
         const boxY = globalInputData.mouseY+12;
@@ -781,13 +817,12 @@ function drawTooltip() {
         });
     }
 
-    let tooltipBox = tooltipBoxes[currentTooltip.index];
-    if(tooltipBox.type === "dictionary"){
-        const word = tooltipBoxes[currentTooltip.index].word;
+    if(tooltip.type === "dictionary"){
+        const word = tooltip.word;
         context.font = '20px zenMaruRegular';
         draw('black', "Definition of " + word, dictionary.entries[word]);
-    } else if (tooltipBox.type === "condition"){
-        const c = tooltipBox.condition;
+    } else if (tooltip.type === "condition"){
+        const c = tooltip.condition;
         const cInfo = conditionData[c.id];
         let cColor = c.color;
         if(cColor === undefined){
@@ -821,8 +856,8 @@ function drawTooltip() {
             }
         }
         draw(cColor,cInfo.name,parsedDesc,false,12);
-    } else if (tooltipBox.type === "item"){
-        let info = itemData[tooltipBox.item];
+    } else if (tooltip.type === "item"){
+        let info = itemData[tooltip.item];
         let splitDesc = info.desc.split("$");
         let parsedDesc = "";
         for(let i in splitDesc){
@@ -833,18 +868,18 @@ function drawTooltip() {
             }
         }
         draw(info.color,info.name,parsedDesc);
-    } else if(tooltipBox.type === "kanji list entry"){
+    } else if(tooltip.type === "kanji list entry"){
         // dont draw shit and the tooltip is just used as a signal that its being hovered over lol
-        /*
-        let kanji = kanjiFileData[tooltipBox.index];
-        let text = kanji.story;
-        context.font = '20px Arial';
-        draw('black',kanji.symbol + "   " + kanji.keyword,text)*/
-    } else if (tooltipBox.type === "kanji"){
-        let kanji = kanjiFileData[tooltipBox.index];
+    } else if (tooltip.type === "kanji"){
+        let kanji = kanjiFileData[tooltip.index];
         let text = kanji.story;
         context.font = '20px Arial';
        draw('black',kanji.symbol + "   " + kanji.keyword,text)
+    } else if(tooltip.type === "ability"){
+        let ability = tooltip.ability;
+        let abilityInfo = abilityFileData[ability];
+        context.font = '18px zenMaruRegular';
+        draw('black',abilityInfo.name,abilityInfo.tooltipDescription);
     }
 }
 
@@ -857,7 +892,7 @@ function reapplyTooltip(){
         globalInputData.mouseX <= t.x + t.width &&    // left of the right edge AND
         globalInputData.mouseY >= t.y &&         // below the top AND
         globalInputData.mouseY <= t.y + t.height) {    // above the bottom
-            currentTooltip = {timeStamp: performance.now(), index: i};
+            currentTooltip = {timeStamp: performance.now(), info: t};
         }
     }
 }
@@ -1325,7 +1360,7 @@ function addTrial(playerKanjiData, kanji, succeeded){
     if(kanji.srsCategory < 3){
         if(playerKanjiData.recentTrialCategories.length===10){
             // Move all elements down 1 and add the new trial
-            for(let i=0;i<8;i++){
+            for(let i=0;i<9;i++){
                 playerKanjiData.recentTrialCategories[i] = playerKanjiData.recentTrialCategories[i+1];
             }
             playerKanjiData.recentTrialCategories[9] = kanji.srsCategory;
@@ -1371,7 +1406,7 @@ function addTrial(playerKanjiData, kanji, succeeded){
 
             playerKanjiData.newKanji.pop();
             globalPlayerStatisticData.totalFirstTryKanji++;
-        } else if(kanji.srsCategory === 1 && reinforcingKanjiScoring(kanji) > 0){
+        } else if(kanji.srsCategory === 1 /*&& reinforcingKanjiScoring(kanji,playerKanjiData.trialsThisSession,currentDate) > 0*/){
             kanji.srsCategoryInfo.currentInterval = kanji.srsCategoryInfo.currentInterval*3*kanji.srsCategoryInfo.reviewMultiplier;
         }
         
@@ -1496,6 +1531,28 @@ function updateConditionTooltips(playerConditions){
 
 // Registers the tooltip boxes for the player's inventory while optionally adding an item in the highest slot
 function updateInventory(playerInventoryData,addItem = "none",addMenuTooltips = false){
+
+    if(addItem !== "none"){
+        for(let i=0; i<playerInventoryData.inventory.length; i++){
+            if(playerInventoryData.inventory[i] === "none"){
+                if(typeof addItem !== "number"){
+                    for(let j=0;j<itemData.length;j++){
+                        if(addItem === itemData[j].name){
+                            addItem = j;
+                            break;
+                        }
+                    }
+                }
+                if(typeof addItem !== "number"){
+                    addItem = 4;
+                }
+                playerInventoryData.inventory[i] = addItem;
+                globalItemsDiscovered[addItem] = true;
+                break;
+            }
+        }
+    }
+    /*
     for(let i = tooltipBoxes.length-1;i>=0;i--){
         if(tooltipBoxes[i].type === "item"){
             tooltipBoxes.splice(i,1);
@@ -1545,8 +1602,8 @@ function updateInventory(playerInventoryData,addItem = "none",addMenuTooltips = 
             addItem = "none";
         }
     }
-
-    reapplyTooltip();
+    */
+    //reapplyTooltip();
 }
 
 function playerTakeDamage(playerStatData,damage){
@@ -1638,6 +1695,7 @@ function updateHunger(playerStatData,playerConditions,hungerChange){
         if(playerStatData.hunger > severeHungerThreshold){
             removeConditionsByName(playerConditions,"Hunger");
             addCondition(playerConditions, {id: 1});
+            status = "starving";
         } else if(playerStatData.hunger > hungerThreshold){
             addCondition(playerConditions, {id: 2});
             status = "hunger added";
@@ -1891,6 +1949,11 @@ function drawDialogueText(dialogue, x, y, maxWidth, lineHeight, timeStamp, regis
 
 // Draws a tile
 function drawTile(type, src, x, y, bitrate = 32, sizeMod = 1){
+    context.drawImage(tilesets.tilesetImages[type], src[0], src[1], bitrate, bitrate, x-1, y-1, bitrate*sizeMod+2, bitrate*sizeMod+2);
+}
+
+// Draws a tile
+function drawTileWithoutHack(type, src, x, y, bitrate = 32, sizeMod = 1){
     context.drawImage(tilesets.tilesetImages[type], src[0], src[1], bitrate, bitrate, x, y, bitrate*sizeMod, bitrate*sizeMod);
 }
 
@@ -2025,7 +2088,7 @@ let newDysymboliaCinematic = function(timeStamp, phase, trials, dysymboliaInfo, 
 // All enemies in the room get a chance to make one action
 let takeEnemyActions = function(timeStamp, roomEnemies, combat){
     // return one of the 4 directions or "adjacent" if already there
-    let routeTowardsPlayer = function(enemyX,enemyY,playerX,playerY){
+    let routeTowardsTile = function(startingTile,targetTile){
         return "adjacent";
     }
     let takeCombatAction = function(enemy){
@@ -2046,7 +2109,7 @@ let takeEnemyActions = function(timeStamp, roomEnemies, combat){
     } else {
         for(let i=0;i<roomEnemies.length;i++){
             let enemy = roomEnemies[i];
-            let step = routeTowardsPlayer();
+            let step = routeTowardsTile(enemy.location,[0,0]);
             if(step === "adjacent"){
                 // initialize combat. we dont use a seperate funciton for this yet.
                 combat = {
@@ -2353,8 +2416,8 @@ function Game(){
         }*/
     ];
 
-    let menuScene = null;
-    let menuData = {
+    /*let globalWorldData.menuScene = null;
+    let globalWorldData.menuData = {
         loadStatement: null,
         selectedAbility: 0,
         selectedKanji: 0,
@@ -2363,7 +2426,7 @@ function Game(){
 
         // array to change the equipped abilities to after menu is closed
         //newEquippedAbilities: [null,null,null,null,null,null,null,null,null,null],
-    }
+    }*/
 
     let dialogue = null;
     let combat = null;
@@ -2384,9 +2447,27 @@ function Game(){
         let newTime = (globalWorldData.gameClockOfLastPause+Math.floor((timeStamp-globalWorldData.timeOfLastUnpause)/1000))%1440;
     
         // If a second went by, update everything that needs to be updated by the second
-        if(dialogue === null && menuScene === null && combat === null && (newTime > globalWorldData.currentGameClock || (globalWorldData.currentGameClock === 1439 && newTime !== 1439))){
+        if(dialogue === null && globalWorldData.menuScene === null && combat === null && (newTime > globalWorldData.currentGameClock || (globalWorldData.currentGameClock === 1439 && newTime !== 1439))){
             if(newTime % 9 === 0){
-                if(updateHunger(playerStatData,playerConditions,1) === "hunger added" && globalPlayerStatisticData.sceneCompletion["tutorial hunger scene"]===0){
+                let hungerStatus = updateHunger(playerStatData,playerConditions,1);
+                
+                if(hungerStatus === "starving"){
+                    playerTakeDamage(playerStatData,Math.round(playerStatData.combatData.maxHp/25));
+                    activeDamage = {
+                        // If startFrame is positive, there is currently active damage.
+                        startFrame: timeStamp,
+            
+                        // Duration of the current damage
+                        duration: 1,
+            
+                        // How much the screen was shaken by
+                        offset: [0,0],
+            
+                        // Last time the screen was shaken to not shake every single frame
+                        timeOfLastShake: -1,
+                    };
+                }
+                if(hungerStatus === "hunger added" && globalPlayerStatisticData.sceneCompletion["tutorial hunger scene"]===0){
                     dialogue = initializeDialogue("scenes","tutorial hunger scene",timeStamp);
                 }
             } 
@@ -2454,28 +2535,35 @@ function Game(){
         }
 
         let applyUpkeepEffects = function(){
-            let newConditions = [];
-            let isUpdateNecessary = false;
             let poisonDamageTaken = 0;
+
+            // First, apply effects
             for(let i=0;i<playerConditions.length;i++){
                 let condition = playerConditions[i];
                 let conditionFileInfo = conditionData[condition.id];
                 if(conditionFileInfo.name === "Lizard Toxin"){
                     poisonDamageTaken++;
                     condition.turnsLeft--;
-                    if(condition.turnsLeft<=0){
-                        isUpdateNecessary = true;
-                    } else {
-                        newConditions.push(condition);
-                    }
-                } else {
-                    newConditions.push(condition);
+                    updateHunger(playerStatData,playerConditions,2);
                 }
             }
     
             if(poisonDamageTaken>0){
                 playerTakeDamage(playerStatData,poisonDamageTaken);
                 addIngameLogLine(`Took ${poisonDamageTaken} poison damage.`,78,100,40,1.5,timeStamp);
+            }
+
+            // Lastly, remove conditions that are ready for removal.
+            let newConditions = [];
+            let isUpdateNecessary = false;
+            for(let i=0;i<playerConditions.length;i++){
+                let condition = playerConditions[i];
+                let conditionFileInfo = conditionData[condition.id];
+                if(condition.turnsLeft<=0){
+                    isUpdateNecessary = true;
+                } else {
+                    newConditions.push(condition);
+                }
             }
     
             if(isUpdateNecessary){
@@ -2620,9 +2708,7 @@ function Game(){
                         for(let i = tooltipBoxes.length-1;i>=0;i--){
                             if(tooltipBoxes[i].type === "dictionary" || tooltipBoxes[i].type === "kanji"){
                                 tooltipBoxes.splice(i,1);
-                                //if(currentTooltip !== null && currentTooltip.index === i){
                                     currentTooltip = null;
-                                //}
                             }
                         }
                         if(dialogue.scenario.includes("tutorial") || dialogue.category === "randomDysymbolia"){
@@ -2714,9 +2800,7 @@ function Game(){
                     for(let i = tooltipBoxes.length-1;i>=0;i--){
                         if(tooltipBoxes[i].type === "dictionary" || tooltipBoxes[i].type === "kanji"){
                             tooltipBoxes.splice(i,1);
-                            //if(currentTooltip !== null && currentTooltip.index === i){
-                                currentTooltip = null;
-                            //}
+                            currentTooltip = null;
                         }
                     }
 
@@ -2872,7 +2956,7 @@ function Game(){
         }
     
         const updateWorldScreen = function(){
-            if(globalInputData.mouseDown && currentTooltip && tooltipBoxes[currentTooltip.index].type === "condition" && tooltipBoxes[currentTooltip.index].condition.id === 0 && playerAbilityData.canManuallyTriggerDysymbolia){
+            if(globalInputData.mouseDown && currentTooltip && currentTooltip.info.type === "condition" && currentTooltip.info.condition.id === 0 && playerAbilityData.canManuallyTriggerDysymbolia){
                 if(timeUntilDysymbolia > 0){
                     timeUntilDysymbolia = 0;
                     globalPlayerStatisticData.totalDysymboliaManualTriggers++;
@@ -3275,29 +3359,45 @@ function Game(){
                     }
                 }
             }
+
+            // Update clouds
+            cloudYOffset+=4/fps
+            cloudXOffset+=2/fps
+            if(cloudYOffset >= 32){
+                cloudYOffset -= 32;
+                for(let i=0; i<clouds.length;i++){
+                    let splicedCloud = clouds[i].splice(0,1)[0];
+                    clouds[i].push(splicedCloud);
+                }
+            }
+            if(cloudXOffset >= 32){
+                cloudXOffset -= 32;
+                let splicedColumn = clouds.splice(0,1)[0];
+                clouds.push(splicedColumn);
+            }
             
         }; // Update world screen function ends here
     
         const updateMenuScreen = function(){
-            if(menuScene === "Kanji List"){
-                if(globalInputData.mouseDown && currentTooltip && tooltipBoxes[currentTooltip.index].type === "kanji list entry"){
-                    menuData.selectedKanji = tooltipBoxes[currentTooltip.index].index;
+            if(globalWorldData.menuScene === "Kanji List"){
+                if(globalInputData.mouseDown && currentTooltip && currentTooltip.info.type === "kanji list entry"){
+                    globalWorldData.menuData.selectedKanji = currentTooltip.info.index;
                 }
-            } else if(menuScene === "Theory"){
-                if(globalInputData.mouseDown && currentTooltip && !menuData.isReadingWriteup && menuData.selectedWriteup !== tooltipBoxes[currentTooltip.index].index && tooltipBoxes[currentTooltip.index].type === "write-up entry"){
-                    menuData.selectedWriteup = tooltipBoxes[currentTooltip.index].index;
+            } else if(globalWorldData.menuScene === "Theory"){
+                if(globalInputData.mouseDown && currentTooltip && !globalWorldData.menuData.isReadingWriteup && globalWorldData.menuData.selectedWriteup !== currentTooltip.info.index && currentTooltip.info.type === "write-up entry"){
+                    globalWorldData.menuData.selectedWriteup = currentTooltip.info.index;
                     initializeMenuTab();
                 }
-            } else if(menuScene === "Abilities"){
-                if(globalInputData.mouseDown && currentTooltip && draggingObject === null && menuData.selectedAbility !== tooltipBoxes[currentTooltip.index].index && tooltipBoxes[currentTooltip.index].type === "ability menu ability"){
-                    menuData.selectedAbility = tooltipBoxes[currentTooltip.index].index;
+            } else if(globalWorldData.menuScene === "Abilities"){
+                if(globalInputData.mouseDown && currentTooltip && draggingObject === null && globalWorldData.menuData.selectedAbility !== currentTooltip.info.index && currentTooltip.info.type === "ability menu ability"){
+                    globalWorldData.menuData.selectedAbility = currentTooltip.info.index;
                     initializeMenuTab();
                 }
             }
             globalInputData.key1Clicked = globalInputData.key2Clicked = false;
         };
     
-        if(menuScene !== null){
+        if(globalWorldData.menuScene !== null){
             updateMenuScreen();
         } else {
             updateWorldScreen();
@@ -3332,6 +3432,9 @@ function Game(){
                         break;
                     case '$master':
                         playerAbilityData.canManuallyTriggerDysymbolia = true;
+                        break;
+                    case '$hunger':
+                        updateHunger(playerStatData,playerConditions,Number(splitCommand[1]));
                         break;
                     case '$timewarp':
                         // This command saves the game to slot 1 with all the dates shifted 24 hours behind
@@ -3375,10 +3478,10 @@ function Game(){
         }
         if(globalInputData.doubleClicked){
             if(currentTooltip!== null){
-                let tooltip = tooltipBoxes[currentTooltip.index];
+                let tooltip = currentTooltip.info;
                 if(tooltip.type === "item"){
                     useItem(playerInventoryData,playerStatData,playerConditions,tooltip.inventoryIndex,tooltip.x + tooltip.width/2,tooltip.y + tooltip.height/2);
-                    updateInventory(playerInventoryData,"none",menuScene==="Inventory");
+                    updateInventory(playerInventoryData,"none",globalWorldData.menuScene==="Inventory");
                 }
             }
             globalInputData.doubleClicked = false;
@@ -3411,9 +3514,6 @@ function Game(){
                 context.translate(ad.offset[0],ad.offset[1]);
             }
         }
-    
-        // Set to false when the right part of the screen is to be used for something else
-        let isToDrawStatusBar = true;
     
         const drawWorldScreen = function(){
             let lev = levels[globalWorldData.levelNum];
@@ -3481,6 +3581,18 @@ function Game(){
                 } else if(layer.name === "Water_Tiles") {
                     for (let t of layer.tiles){
                         cameraTile(i, [32*Math.floor( (timeStamp/400) % 4),0], t.px[0], t.px[1],camX,camY);
+                    }
+                } else if(layer.name === "Cloud_Tiles") {
+                    for (let t of layer.tiles){
+                        cameraTile(i, clouds[t.px[0]/32][t.px[1]/32], t.px[0]-cloudXOffset, t.px[1]-cloudYOffset,camX,camY);
+                    }
+                    //draw south border of clouds
+                    for (let j=0; j<clouds[0].length; j++){
+                        cameraTile(i, clouds[j][clouds.length-1], j*32-cloudXOffset, (clouds.length-1)*32-cloudYOffset,camX,camY);
+                    }
+                    // draw west border of clouds
+                    for (let j=0; j<clouds.length-1; j++){
+                        cameraTile(i, clouds[clouds.length-1][j], (clouds.length-1)*32-cloudXOffset, j*32-cloudYOffset,camX,camY);
                     }
                 } else {
                     for (let t of layer.tiles){
@@ -3951,7 +4063,7 @@ function Game(){
             context.font = '36px zenMaruRegular';
             context.textAlign = 'center';
             context.fillStyle = 'white';
-            context.fillText(menuScene, globalWorldData.worldX+345 + 150, globalWorldData.worldY+80);
+            context.fillText(globalWorldData.menuScene, globalWorldData.worldX+345 + 150, globalWorldData.worldY+80);
     
             // Each menu tab has its local function
             const drawInventoryScreen = function(){
@@ -3959,7 +4071,15 @@ function Game(){
                 context.fillText("First 5 items can be used on the inventory hotbar!", globalWorldData.worldX+345 + 150, globalWorldData.worldY+580);
                 context.fillText("Double click to use consumables!", globalWorldData.worldX+345 + 150, globalWorldData.worldY+630);
                 context.fillText("Crafting coming soon?!????!??!!?", globalWorldData.worldX+345 + 150, globalWorldData.worldY+680);
+
+                for(let i=0;i<globalMenuTabUiElements.length;i++){
+                    let uiElement = globalMenuTabUiElements[i];
+                    if(uiElement.type === "inventory slot"){
+                        drawInventorySlot(uiElement,playerInventoryData);
+                    }
+               }
   
+               /*
                 for(let i=0;i<Math.ceil(playerInventoryData.inventory.length/5);i++){
                     for(let j=0;j<5;j++){
                         context.lineWidth = 2;
@@ -3978,7 +4098,7 @@ function Game(){
                             context.restore();
                         }
                     }
-                }
+                }*/
     
                 if(draggingObject){
                     let offsetX = globalInputData.mouseX - draggingObject.clickX, offsetY = globalInputData.mouseY - draggingObject.clickY;
@@ -4005,7 +4125,7 @@ function Game(){
                         context.lineWidth = 2;
                         let textFill = 'white';
                         // Change colors based on the kanji info
-                        if(menuData.selectedKanji === currentIndex){
+                        if(globalWorldData.menuData.selectedKanji === currentIndex){
                             context.strokeStyle = 'hsla(60, 100%, 100%, 1)';
                             context.lineWidth = 4;
                             if(!playerKanjiData.kanjiList[currentIndex].enabled){
@@ -4036,11 +4156,9 @@ function Game(){
                 }
     
                 // Draw kanji info on side of screen
-                if(menuData.selectedKanji !== null){
-                    isToDrawStatusBar = false;
-    
-                    let kanjiInfo = kanjiFileData[menuData.selectedKanji];
-                    let playerKanjiInfo = playerKanjiData.kanjiList[menuData.selectedKanji];
+                if(globalWorldData.menuData.selectedKanji !== null){
+                    let kanjiInfo = kanjiFileData[globalWorldData.menuData.selectedKanji];
+                    let playerKanjiInfo = playerKanjiData.kanjiList[globalWorldData.menuData.selectedKanji];
     
                     context.fillStyle = 'hsl(0, 0%, 10%, 55%)';
                     context.save();
@@ -4101,7 +4219,7 @@ function Game(){
                 context.font = '20px ZenMaruRegular';
                 context.textAlign = 'left';
     
-                if(!menuData.isReadingWriteup){
+                if(!globalWorldData.menuData.isReadingWriteup){
                     let listPosition = 0;
                     for(let i=0;i<theoryWriteupData.length;i++){
                         if(!playerTheoryData[i].listed){
@@ -4111,7 +4229,7 @@ function Game(){
                         let theory = theoryWriteupData[i];                     
                         
                         
-                        if(menuData.selectedWriteup === i){
+                        if(globalWorldData.menuData.selectedWriteup === i){
                             context.lineWidth = 4;
                             context.strokeStyle = 'hsla(60, 100%, 100%, 1)';
                         } else {
@@ -4147,7 +4265,7 @@ function Game(){
     
                 } else {
                     context.font = '18px ZenMaruRegular';
-                    let writeupInfo = theoryWriteupData[menuData.selectedWriteup];
+                    let writeupInfo = theoryWriteupData[globalWorldData.menuData.selectedWriteup];
                     let wrappedText = wrapText(context, writeupInfo.pages[writeupInfo.currentPage], globalWorldData.worldY+140, w-55, 20);
                     wrappedText.forEach(function(item) {
                         // item[0] is the text
@@ -4161,10 +4279,8 @@ function Game(){
                     context.fillText("Page "+(writeupInfo.currentPage+1)+"/"+writeupInfo.pages.length, globalWorldData.worldX+(18*TILE_SIZE/2)+215, globalWorldData.worldY+h*globalWorldData.sizeMod-130);
                 }
     
-                if(menuData.selectedWriteup !== null){
-                    isToDrawStatusBar = false;
-    
-                    let writeupInfo = theoryWriteupData[menuData.selectedWriteup];
+                if(globalWorldData.menuData.selectedWriteup !== null){
+                    let writeupInfo = theoryWriteupData[globalWorldData.menuData.selectedWriteup];
     
                     // Right-side box
                     context.fillStyle = 'hsl(0, 0%, 10%, 55%)';
@@ -4252,7 +4368,7 @@ function Game(){
                     context.fillStyle = 'white';
                     context.textAlign = 'center';
                     let rewardText = writeupInfo.rewardText;
-                    if(playerTheoryData[menuData.selectedWriteup].unlocked){
+                    if(playerTheoryData[globalWorldData.menuData.selectedWriteup].unlocked){
                         rewardText+= " (Collected)";
                     }
                     wrappedText = wrapText(context, rewardText, globalWorldData.worldY+currentY+28+38, 240, 18);
@@ -4276,6 +4392,7 @@ function Game(){
                 let currentY = 135;
     
                 // Draw ability bar
+                /*
                 for(let i=0;i<playerAbilityData.abilitySlots;i++){
                     if(playerAbilityData.equippedAbilities[i] !== null && (draggingObject === null || draggingObject.index !== i)){
                         context.drawImage(abilityIcons[ playerAbilityData.list[playerAbilityData.equippedAbilities[i]].index ],globalWorldData.worldX+247+250-playerAbilityData.abilitySlots*25+50*i,globalWorldData.worldY+currentY,45,45);
@@ -4294,6 +4411,12 @@ function Game(){
                         context.fillStyle = 'black';
                         context.fill();
                         context.stroke();
+                    }
+                }*/
+                for(let i=0;i<globalMenuTabUiElements.length;i++){
+                    let uiElement = globalMenuTabUiElements[i];
+                    if(uiElement.type === "ability slot"){
+                        drawAbilitySlot(uiElement,playerAbilityData);
                     }
                 }
     
@@ -4316,7 +4439,7 @@ function Game(){
     
                         context.drawImage(abilityIcons[playerAbilityData.list[currentIndex].index],globalWorldData.worldX+247+250-currentRowWidth*25+50*j,globalWorldData.worldY+currentY+70+50*i,45,45);
     
-                        if(menuData.selectedAbility === currentIndex){
+                        if(globalWorldData.menuData.selectedAbility === currentIndex){
                             context.strokeStyle = 'hsla(60, 100%, 100%, 1)';
                             context.lineWidth = 3;
                         } else {
@@ -4331,11 +4454,9 @@ function Game(){
                     }
                 }
     
-                if(menuData.selectedAbility !== null){
+                if(globalWorldData.menuData.selectedAbility !== null){
                     // Draw ability information on the right side
-                    isToDrawStatusBar = false;
-    
-                    let playerAbilityInfo = playerAbilityData.list[menuData.selectedAbility];
+                    let playerAbilityInfo = playerAbilityData.list[globalWorldData.menuData.selectedAbility];
                     let abilityInfo = abilityFileData[playerAbilityInfo.index];
     
                     // Right-side box
@@ -4425,8 +4546,8 @@ function Game(){
             } // Draw ability screen function ends here
 
             const drawSaveScreen = function(){
-                if(menuData.loadStatement !== null){
-                    let ls = menuData.loadStatement;
+                if(globalWorldData.menuData.loadStatement !== null){
+                    let ls = globalWorldData.menuData.loadStatement;
 
                     context.font = '18px zenMaruRegular';
                     context.fillText("Welcome back to the world of unnamed kanji game!", globalWorldData.worldX+345 + 150, globalWorldData.worldY+140);
@@ -4435,20 +4556,20 @@ function Game(){
                 }
             } // Draw save screen function ends here
     
-            if(menuScene === "Inventory"){
+            if(globalWorldData.menuScene === "Inventory"){
                 drawInventoryScreen();
-            } else if(menuScene === "Kanji List"){
+            } else if(globalWorldData.menuScene === "Kanji List"){
                 drawKanjiScreen();
-            } else if(menuScene === "Theory"){
+            } else if(globalWorldData.menuScene === "Theory"){
                 drawTheoryScreen();
-            } else if(menuScene === "Abilities"){
+            } else if(globalWorldData.menuScene === "Abilities"){
                 drawAbilityScreen();
-            } else if(menuScene === "Save"){
+            } else if(globalWorldData.menuScene === "Save"){
                 drawSaveScreen();
             }
         }
     
-        if(menuScene !== null){
+        if(globalWorldData.menuScene !== null){
             drawMenuScreen();
         } else {
             drawWorldScreen();
@@ -4482,7 +4603,7 @@ function Game(){
                 let fontSize = Math.floor(16*globalWorldData.sizeMod);
                 context.font = `${fontSize}px zenMaruRegular`;
     
-                if(menuScene !== null){
+                if(globalWorldData.menuScene !== null){
                     context.fillText(logItem.text,globalWorldData.worldX+w*globalWorldData.sizeMod/2,globalWorldData.worldY+h*globalWorldData.sizeMod+64*globalWorldData.sizeMod-(fontSize+5)*logItemsDrawn);
                 } else if(dialogue){
                     context.fillText(logItem.text,globalWorldData.worldX+w*globalWorldData.sizeMod/2,globalWorldData.worldY+h*globalWorldData.sizeMod-108*globalWorldData.sizeMod-(fontSize+5)*logItemsDrawn);
@@ -4502,7 +4623,7 @@ function Game(){
         }
     
         // Draw the right part of the screen
-        if(isToDrawStatusBar){
+        if(globalWorldData.sidebar === "status"){
             context.fillStyle = 'hsl(0, 0%, 10%, 55%)';
             context.save();
             context.shadowColor = "hsl(0, 30%, 0%)";
@@ -4586,7 +4707,7 @@ function Game(){
                 }
                 context.font = '18px zenMaruMedium';
     
-                if( (conditionLine + cInfo.name).length > "Conditions: Dysymbolia, Hunger, aaa".length){
+                if( (conditionLine + cInfo.name).length > "Conditions: Dysymbolia, Hunger, aa".length){
                     conditionLine = "";
                     conditionLineNum++;
                 }
@@ -4718,8 +4839,9 @@ function Game(){
 
         handleDraggingObject = undefined;
         draggingObject = null;
+        globalWorldData.sidebar = "status";
 
-        if(menuScene === "Inventory"){
+        if(globalWorldData.menuScene === "Inventory"){
             updateInventory(playerInventoryData,"none",true);
 
             handleDraggingObject = function(action){
@@ -4778,7 +4900,8 @@ function Game(){
                     draggingObject = null;
                 }
             }
-        } else if(menuScene === "Kanji List"){
+        } else if(globalWorldData.menuScene === "Kanji List"){
+            globalWorldData.sidebar = "kanji";
             let rowAmount = 12;
             for(let i=0;i<Math.ceil(kanjiFileData.length/rowAmount);i++){
                 for(let j=0; j<Math.min(rowAmount,kanjiFileData.length-i*rowAmount);j++){
@@ -4797,11 +4920,11 @@ function Game(){
                 neutralColor: '#b3b3ff', hoverColor: '#e6e6ff', pressedColor: '#ff66ff', color: '#b3b3ff',
                 text: "Toggle Enabled Status", font: '13px zenMaruRegular', fontSize: 18, enabled: true, temporaryMenuButton: true,
                 onClick: function(){
-                    playerKanjiData.kanjiList[menuData.selectedKanji].enabled = !playerKanjiData.kanjiList[menuData.selectedKanji].enabled;
+                    playerKanjiData.kanjiList[globalWorldData.menuData.selectedKanji].enabled = !playerKanjiData.kanjiList[globalWorldData.menuData.selectedKanji].enabled;
                 }
             });
-        } else if(menuScene === "Theory"){
-
+        } else if(globalWorldData.menuScene === "Theory"){
+            globalWorldData.sidebar = "theory";
             for(let i=0, listedNum=0;i<theoryWriteupData.length;i++){
                 if(!theoryWriteupData[i].hasOwnProperty("listRequirements")){
                     playerTheoryData[i].listed = true;
@@ -4821,15 +4944,15 @@ function Game(){
                 playerTheoryData[i].conditionsMet = evaluateUnlockRequirements(playerAbilityData, playerTheoryData, theoryWriteupData[i].unlockRequirements);
             }
 
-            if(menuData.isReadingWriteup){
-                let writeupInfo = theoryWriteupData[menuData.selectedWriteup];
+            if(globalWorldData.menuData.isReadingWriteup){
+                let writeupInfo = theoryWriteupData[globalWorldData.menuData.selectedWriteup];
 
                 buttons.push({
                     x:globalWorldData.worldX+18*16*globalWorldData.sizeMod*2+132, y:globalWorldData.worldY+700, width:100, height:30,
                     neutralColor: '#b3b3ff', hoverColor: '#e6e6ff', pressedColor: '#ff66ff', color: '#b3b3ff',
                     text: "Stop Reading", font: '13px zenMaruRegular', fontSize: 18, enabled: true, temporaryMenuButton: true,
                     onClick: function(){
-                        menuData.isReadingWriteup = false;
+                        globalWorldData.menuData.isReadingWriteup = false;
                         initializeMenuTab();
                     }
                 });
@@ -4840,7 +4963,7 @@ function Game(){
                         neutralColor: '#b3b3ff', hoverColor: '#e6e6ff', pressedColor: '#ff66ff', color: '#b3b3ff', radius:1,
                         text: "<", font: '30px zenMaruRegular', fontSize: 30, enabled: true, temporaryMenuButton: true,
                         onClick: function(){
-                            theoryWriteupData[menuData.selectedWriteup].currentPage--;
+                            theoryWriteupData[globalWorldData.menuData.selectedWriteup].currentPage--;
                             initializeMenuTab();
                         }
                     });
@@ -4852,32 +4975,32 @@ function Game(){
                         neutralColor: '#b3b3ff', hoverColor: '#e6e6ff', pressedColor: '#ff66ff', color: '#b3b3ff', radius:1,
                         text: ">", font: '30px zenMaruRegular', fontSize: 30, enabled: true, temporaryMenuButton: true,
                         onClick: function(){
-                            theoryWriteupData[menuData.selectedWriteup].currentPage++;
+                            theoryWriteupData[globalWorldData.menuData.selectedWriteup].currentPage++;
                             initializeMenuTab();
                         }
                     });
                 }
             } else {
-                if(playerTheoryData[menuData.selectedWriteup].unlocked){
+                if(playerTheoryData[globalWorldData.menuData.selectedWriteup].unlocked){
                     buttons.push({
                         x:globalWorldData.worldX+18*16*globalWorldData.sizeMod*2+157, y:globalWorldData.worldY+700, width:50, height:30,
                         neutralColor: '#b3b3ff', hoverColor: '#e6e6ff', pressedColor: '#ff66ff', color: '#b3b3ff',
                         text: "Read", font: '13px zenMaruRegular', fontSize: 18, enabled: true, temporaryMenuButton: true,
                         onClick: function(){
-                            menuData.isReadingWriteup = true;
+                            globalWorldData.menuData.isReadingWriteup = true;
                             initializeMenuTab();
                         }
                     });
-                } else if(playerTheoryData[menuData.selectedWriteup].conditionsMet){
+                } else if(playerTheoryData[globalWorldData.menuData.selectedWriteup].conditionsMet){
                     buttons.push({
                         x:globalWorldData.worldX+18*16*globalWorldData.sizeMod*2+98, y:globalWorldData.worldY+700, width:170, height:30,
                         neutralColor: '#ff6', hoverColor: '#ffffb3', pressedColor: '#66f', color: '#ff6',
                         text: "Unlock and Collect Reward", font: '13px zenMaruRegular', fontSize: 18, enabled: true, temporaryMenuButton: true,
                         onClick: function(){
-                            let theoryNum = menuData.selectedWriteup;
+                            let theoryNum = globalWorldData.menuData.selectedWriteup;
                             if(playerTheoryData[theoryNum].conditionsMet){
                                 playerTheoryData[theoryNum].unlocked = true;
-                                menuData.isReadingWriteup = true;
+                                globalWorldData.menuData.isReadingWriteup = true;
                                 for(let i in theoryWriteupData[theoryNum].unlockRewards){
                                     awardPlayer(playerInventoryData,theoryWriteupData[theoryNum].unlockRewards[i],performance.now());
                                 }
@@ -4887,7 +5010,8 @@ function Game(){
                     });
                 }
             }
-        } else if(menuScene === "Abilities"){
+        } else if(globalWorldData.menuScene === "Abilities"){
+            globalWorldData.sidebar = "ability";
             updatePlayerAbilityList(playerAbilityData);
             let playerAbilityList = playerAbilityData.list;
 
@@ -4905,7 +5029,7 @@ function Game(){
                 }
             }
 
-            let playerAbilityInfo = playerAbilityList[menuData.selectedAbility];
+            let playerAbilityInfo = playerAbilityList[globalWorldData.menuData.selectedAbility];
             let abilityInfo = abilityFileData[playerAbilityInfo.index];
             if(!playerAbilityInfo.acquired && playerAbilityInfo.unlocked && playerStatData.power >= abilityInfo.acquisitionPower){
                 buttons.push({
@@ -4931,16 +5055,16 @@ function Game(){
 
             handleDraggingObject = function(action){
                 if(action==="mousedown"){
-                    if(currentTooltip && tooltipBoxes[currentTooltip.index].type === "ability menu ability" && playerAbilityData.acquiredAbilities[playerAbilityData.list[tooltipBoxes[currentTooltip.index].index].name]){
-                        menuData.selectedAbility = tooltipBoxes[currentTooltip.index].index;
+                    if(currentTooltip && currentTooltip.info.type === "ability menu ability" && playerAbilityData.acquiredAbilities[playerAbilityData.list[currentTooltip.info.index].name]){
+                        globalWorldData.menuData.selectedAbility = currentTooltip.info.index;
                         initializeMenuTab();
                         draggingObject = {
-                            originalX: tooltipBoxes[currentTooltip.index].x,
-                            originalY: tooltipBoxes[currentTooltip.index].y,
+                            originalX: currentTooltip.info.x,
+                            originalY: currentTooltip.info.y,
                             clickX: globalInputData.mouseX,
                             clickY: globalInputData.mouseY,
                             type: "ability",
-                            abilityIndex: tooltipBoxes[currentTooltip.index].index, //todo: make a system that replaces the tooltipbox "hack" with something more informative, decoupled, and useful
+                            abilityIndex: currentTooltip.info.index, //todo: finish refactoring this stuff by utilizing the new ui system to make this make more sense
                             source: "ability list"
                         }
                     } else {
@@ -4953,7 +5077,7 @@ function Game(){
                             };
                             if (globalInputData.mouseX >= box.x && globalInputData.mouseX <= box.x + box.width && globalInputData.mouseY >= box.y && globalInputData.mouseY <= box.y + box.height) {
                                 if(playerAbilityData.equippedAbilities[i] !== null){
-                                    menuData.selectedAbility = playerAbilityData.equippedAbilities[i];
+                                    globalWorldData.menuData.selectedAbility = playerAbilityData.equippedAbilities[i];
                                     initializeMenuTab();
                                     draggingObject = {
                                         originalX: box.x,
@@ -4998,14 +5122,14 @@ function Game(){
                 draggingObject = null
             }
 
-        } else if(menuScene === "Save") {
-            if(menuData.loadStatement !== null){
+        } else if(globalWorldData.menuScene === "Save") {
+            if(globalWorldData.menuData.loadStatement !== null){
                 buttons.push({
                     x:globalWorldData.worldX+247+140, y:globalWorldData.worldY+370+300, width:200, height:35,
                     neutralColor: '#b3b3ff', hoverColor: '#e6e6ff', pressedColor: '#ff66ff', color: '#b3b3ff',
                     text: "Close Load Statement", font: '17px zenMaruRegular', fontSize: 17, enabled: true, temporaryMenuButton: true,
                     onClick: function(){
-                        menuData.loadStatement = null;
+                        globalWorldData.menuData.loadStatement = null;
                         initializeMenuTab();
                     }
                 });
@@ -5123,8 +5247,8 @@ function Game(){
             dialogue = save.dialogue;
             combat = save.combat;
             globalWorldData.levelNum = save.levelNum;
-            menuData.selectedAbility = 0;
-            menuData.selectedWriteup = 0;
+            globalWorldData.menuData.selectedAbility = 0;
+            globalWorldData.menuData.selectedWriteup = 0;
             
             timeUntilDysymbolia = save.timeUntilDysymbolia;
 
@@ -5203,7 +5327,7 @@ function Game(){
             let minuteRemainder = Math.floor(dateDifference%(1000 * 60 * 60)/(1000 * 60));
 
             // Create the load statement
-            menuData.loadStatement = {
+            globalWorldData.menuData.loadStatement = {
                 dayDifference: dayDifference,
                 hourRemainder: hourRemainder,
                 minuteRemainder: minuteRemainder,
@@ -5222,8 +5346,8 @@ function Game(){
 
     // called on button press. toggles menu and returns "closed menu" or "opened menu"
     this.handleMenuButtonPress = function(){
-        if(menuScene === null){
-            menuScene = "Inventory";
+        if(globalWorldData.menuScene === null){
+            globalWorldData.menuScene = "Inventory";
             globalWorldData.gameClockOfLastPause = globalWorldData.currentGameClock;
             for(let i in buttons){
                 let b = buttons[i];
@@ -5238,7 +5362,7 @@ function Game(){
 
             return "opened menu";
         } else {
-            menuScene = null;
+            globalWorldData.menuScene = null;
             globalWorldData.timeOfLastUnpause = performance.now();
             for(let i = buttons.length-1;i>=0;i--){
                 let b = buttons[i];
@@ -5253,6 +5377,7 @@ function Game(){
             }
             handleDraggingObject = undefined;
             draggingObject = null;
+            globalWorldData.sidebar = "status";
             updateInventory(playerInventoryData);
 
             return "closed menu";
@@ -5260,7 +5385,7 @@ function Game(){
     };
 
     this.handleMenuTabButtonPress = function(tab){
-        menuScene = tab;
+        globalWorldData.menuScene = tab;
         initializeMenuTab();
     };
 
@@ -5279,6 +5404,32 @@ function Game(){
             }
         }
 
+        const checkTooltipOfUiElement = function(uiElement){
+            if(uiElement.type === "inventory slot"){
+                let t = uiElement.tooltip;
+                t.item = playerInventoryData.inventory[t.inventoryIndex];
+
+                if (t.item !== "none" &&
+                    mouseX >= t.x &&         // right of the left edge AND
+                    mouseX <= t.x + t.width &&    // left of the right edge AND
+                    mouseY >= t.y &&         // below the top AND
+                    mouseY <= t.y + t.height) {    // above the bottom
+                        currentTooltip = {timeStamp: performance.now(), info: t};
+                }
+            } else if(uiElement.type === "ability slot"){
+                let t = uiElement.tooltip;
+                t.ability = playerAbilityData.equippedAbilities[t.slotNum];
+
+                if (typeof t.ability === "number" &&
+                    mouseX >= t.x &&         // right of the left edge AND
+                    mouseX <= t.x + t.width &&    // left of the right edge AND
+                    mouseY >= t.y &&         // below the top AND
+                    mouseY <= t.y + t.height) {    // above the bottom
+                        currentTooltip = {timeStamp: performance.now(), info: t};
+                }
+            }
+        }
+
         if(currentTooltip === null){
             //check if we hovered over a tooltip
             for (let i=0;i<tooltipBoxes.length;i++) {
@@ -5287,11 +5438,21 @@ function Game(){
                 mouseX <= t.x + t.width &&    // left of the right edge AND
                 mouseY >= t.y &&         // below the top AND
                 mouseY <= t.y + t.height) {    // above the bottom
-                    currentTooltip = {timeStamp: performance.now(), index: i};
+                    currentTooltip = {timeStamp: performance.now(), info: t};
+                }
+            }
+            if(globalWorldData.menuScene === "Inventory"){
+                for (let i=0;i<globalMenuTabUiElements.length;i++) {
+                    checkTooltipOfUiElement(globalMenuTabUiElements[i]);
+                }
+            }
+            if(globalWorldData.sidebar === "status"){
+                for (let i=0;i<globalStatusBarUiElements.length;i++) {
+                    checkTooltipOfUiElement(globalStatusBarUiElements[i]);
                 }
             }
         } else {
-            let t = tooltipBoxes[currentTooltip.index];
+            let t = currentTooltip.info;
             //check if we are still hovering
             if (mouseX >= t.x &&         // right of the left edge AND
             mouseX <= t.x + t.width &&    // left of the right edge AND
@@ -5504,8 +5665,8 @@ function Game(){
 
         // Draw tooltip over everything else
         if(currentTooltip !== null){
-            if(timeStamp - currentTooltip.timeStamp > tooltipBoxes[currentTooltip.index].spawnTime){
-                drawTooltip();
+            if(timeStamp - currentTooltip.timeStamp > currentTooltip.info.spawnTime){
+                drawTooltip(currentTooltip.info);
             }
         }
 
@@ -5595,6 +5756,34 @@ Player Src: ${playerWorldData.src}
         }
     }
 
+    // Initialize cloud layer
+    for(let i=0; i<levels[0].gridHeight+1;i++){
+        clouds.push([]);
+        for(let j=0; j<levels[0].gridWidth+1;j++){
+            // If cloud num is 0 its a blank white cloud, if its 1-4 its one of the 4
+            let cloudNum = 0;
+            let cloudSrc = [32*4,32*4];
+            if(Math.random() > 0.6){
+                cloudNum = Math.floor(Math.random()*4+1);
+                if(cloudNum === 1){
+                    cloudSrc = [32,32*5];
+                }
+                if(cloudNum === 2){
+                    cloudSrc = [64,32*5];
+                }
+                if(cloudNum === 3){
+                    cloudSrc = [32,32*6];
+                }
+                if(cloudNum === 4){
+                    cloudSrc = [64,32*6];
+                }
+            }
+
+            
+            clouds[i].push(cloudSrc);
+        }
+    }
+
     // Initialize!
     initializeNewSaveGame(playerKanjiData,playerTheoryData,playerAbilityData,playerStatData,playerConditions);
     dialogue = initializeDialogue("scenes","opening scene",performance.now());
@@ -5614,7 +5803,7 @@ Player Src: ${playerWorldData.src}
             45,
             45,
             [],
-            {type: "item", spawnTime: 0}
+            {type: "item", spawnTime: 0, inventoryIndex: i}
         );
         uiElement.slotNum = i;
         globalStatusBarUiElements.push(uiElement);
@@ -5630,12 +5819,45 @@ Player Src: ${playerWorldData.src}
             45,
             45,
             [],
-            {type: "ability", spawnTime: 0}
+            {type: "ability", spawnTime: 500, slotNum: i}
         );
         uiElement.slotNum = i;
         globalStatusBarUiElements.push(uiElement);
     }
-    
+
+    // menu inventory
+    for(let i=0;i<Math.ceil(playerInventoryData.inventory.length/5);i++){
+        for(let j=0;j<5;j++){
+            let uiElement = createUiElement(
+                "menu inventory slot " + i,
+                "inventory slot",
+                globalWorldData.worldY+285+105+67*j,
+                globalWorldData.worldY+160 + 67*i,
+                60,
+                60,
+                [],
+                {type: "item", spawnTime: 0, inventoryIndex: j + i*5}
+            );
+            uiElement.slotNum = j + i*5;
+            globalMenuTabUiElements.push(uiElement);
+        }
+    }
+
+    //menu abilities
+    for(let i=0;i<playerAbilityData.abilitySlots;i++){
+        let uiElement = createUiElement(
+            "menu ability slot " + i,
+            "ability slot",
+            globalWorldData.worldX+247+250-playerAbilityData.abilitySlots*25+50*i,
+            globalWorldData.worldY+135,
+            45,
+            45,
+            [],
+            {type: "ability", spawnTime: 0}
+        );
+        uiElement.slotNum = i;
+        globalMenuTabUiElements.push(uiElement);
+    }
 }
 
 // Loop that waits for assets and starts game
@@ -5728,15 +5950,15 @@ function init(){
     miscImages.gold = new Image();
     miscImages.gold.src = `/assets/some ui/gold-coins.png`;
     miscImages.gun = new Image();
-    miscImages.gun.src = `/assets/Snoopeth's Guns/1px/33.png`
+    miscImages.gun.src = `/assets/Snoopeth's Guns/1px/33.png`;
     miscImages.blueberry = new Image();
-    miscImages.blueberry.src = `/assets/Sprout Lands 32/bberry.png`
+    miscImages.blueberry.src = `/assets/Sprout Lands 32/bberry.png`;
     miscImages.yellowberry = new Image();
-    miscImages.yellowberry.src = `/assets/Sprout Lands 32/yberry.png`
+    miscImages.yellowberry.src = `/assets/Sprout Lands 32/yberry.png`;
     miscImages.bbush = new Image();
-    miscImages.bbush.src = `/assets/Sprout Lands 32/bbush.png`
+    miscImages.bbush.src = `/assets/Sprout Lands 32/bbush.png`;
     miscImages.ybush = new Image();
-    miscImages.ybush.src = `/assets/Sprout Lands 32/ybush.png`
+    miscImages.ybush.src = `/assets/Sprout Lands 32/ybush.png`;
 
     // Get a reference to the canvas
     canvas = document.getElementById('canvas');
